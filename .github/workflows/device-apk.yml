@@ -26,13 +26,28 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build Android 8+ debug APK
-        run: ./gradlew :mobile:assembleDebug --stacktrace
+      - name: Prepare public release authentication assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth_dir="$RUNNER_TEMP/diplay-auth-assets"
+          mkdir -p "$auth_dir/offline-mfi"
+          curl --fail --location --silent --show-error \
+            https://github.com/shihabal3amri/DiPlay/releases/download/v0.2.21/DiPlay-0.2.21.apk \
+            --output "$RUNNER_TEMP/diplay-0.2.21.apk"
+          echo "916c0708beb1022d4ea9678ff6a46dfb6d234f707837a2cbd80d615e8e2bb2e3  $RUNNER_TEMP/diplay-0.2.21.apk" | sha256sum --check
+          unzip -p "$RUNNER_TEMP/diplay-0.2.21.apk" assets/offline-mfi/identity.pk8 > "$auth_dir/offline-mfi/identity.pk8"
+          unzip -p "$RUNNER_TEMP/diplay-0.2.21.apk" assets/offline-mfi/certificate.p7b > "$auth_dir/offline-mfi/certificate.p7b"
+          chmod 600 "$auth_dir/offline-mfi/identity.pk8" "$auth_dir/offline-mfi/certificate.p7b"
+          echo "DIPLAY_AUTH_ASSETS_DIR=$auth_dir" >> "$GITHUB_ENV"
+
+      - name: Build standalone Android 8+ debug APK
+        run: ./gradlew :mobile:assembleStandaloneDebug --stacktrace
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: diplay-honor-7a-debug-source-build
+          name: diplay-honor-7a-standalone-debug
           path: mobile/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14

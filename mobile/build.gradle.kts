@@ -39,7 +39,7 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".hudtest"
+            applicationIdSuffix = ".honor7a"
             versionNameSuffix = "-hud-test"
         }
         release {

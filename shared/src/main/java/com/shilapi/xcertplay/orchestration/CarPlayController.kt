@@ -15,6 +15,7 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -281,6 +282,7 @@ class CarPlayController(
 
     @Volatile private var hotspot: WirelessHotspotManager? = null
     @Volatile private var wifiScanPause: WifiScanPause? = null
+    @Volatile private var wifiPerformanceLock: WifiManager.WifiLock? = null
     @Volatile private var bonjour: CarPlayBonjour? = null
     private val wirelessResourceLock = Any()
     private val wirelessFailureReported = AtomicBoolean(false)
@@ -1303,6 +1305,7 @@ class CarPlayController(
             if (isStaleWirelessRun(generation)) {
                 return
             }
+            acquireWifiPerformanceLock(hotspotInfo.backend)
             pauseWifiScans(hotspotInfo.backend)
             val startedHotspot = hotspot
             wirelessConnectionProof.begin(generation) {
@@ -2536,6 +2539,31 @@ class CarPlayController(
         (wifiScanPause ?: WifiScanPause(appContext, ::debugLog).also { wifiScanPause = it }).pause()
     }
 
+    /** Keep the shared 2.4 GHz radio out of its low-power mode during a Wi-Fi Direct video session. */
+    private fun acquireWifiPerformanceLock(backend: WirelessHotspotBackend) = synchronized(wirelessResourceLock) {
+        if (backend != WirelessHotspotBackend.WIFI_P2P || wifiPerformanceLock?.isHeld == true) return@synchronized
+        try {
+            val manager = appContext.getSystemService(WifiManager::class.java)
+                ?: throw IllegalStateException("Wi-Fi service unavailable")
+            val lock = manager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "DiPlay:CarPlay")
+                .apply { setReferenceCounted(false); acquire() }
+            wifiPerformanceLock = lock
+            debugLog("Wi-Fi high-performance lock acquired backend=${backend.label} held=${lock.isHeld}")
+        } catch (failure: Exception) {
+            debugLog("Wi-Fi high-performance lock unavailable failureClass=${failure.javaClass.simpleName}")
+        }
+    }
+
+    private fun releaseWifiPerformanceLock() = synchronized(wirelessResourceLock) {
+        val lock = wifiPerformanceLock
+        wifiPerformanceLock = null
+        if (lock?.isHeld == true) {
+            runCatching { lock.release() }
+                .onSuccess { debugLog("Wi-Fi high-performance lock released") }
+                .onFailure { debugLog("Wi-Fi high-performance lock release failed failureClass=${it.javaClass.simpleName}") }
+        }
+    }
+
     private fun selectWirelessBluetoothDevice(adapter: BluetoothAdapter): BluetoothDevice {
         val bonded = adapter.bondedDevices.orEmpty()
         config.wirelessBluetoothDeviceAddress?.let { selected ->
@@ -2734,6 +2762,7 @@ class CarPlayController(
             val activeHotspot = hotspot
             hotspot = null
             if (activeHotspot != null) closeBestEffort("wireless hotspot") { activeHotspot.close() }
+            releaseWifiPerformanceLock()
             wirelessRuntimeIdentification = null
             wirelessAirPlayEndpoint = null
             wirelessPublishedAddress = null
